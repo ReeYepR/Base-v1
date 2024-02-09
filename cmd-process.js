@@ -35,6 +35,7 @@ module.exports.command_process = async (m, msg, sock) => {
   
   if(!prefix) return
   const data = commands.filter(d=> d.name == command || d.alias?.includes(command))[0]
+ if(!data) return
   data.execute({bot, message, sender, command, prefix, input, msg})
   
 }

@@ -1,6 +1,7 @@
 const {
   default: makeWASock,
-  useMultiFileAuthState
+  useMultiFileAuthState,
+  downloadMediaMessage
 } = require("@whiskeysockets/baileys")
 const readline = require("readline")
 const Pino = require("pino")
@@ -26,10 +27,12 @@ const question = text =>
 
 module.exports.start = start
 
+let sock
+
 async function start() {
   console.log("Memulai bot...".green)
   const auth = await useMultiFileAuthState("sessions")
-  let sock = makeWASock({
+  sock = makeWASock({
     printQRInTerminal: !pairing,
     browser: ["Chrome (Linux)", "", ""],
     auth: auth.state,
@@ -67,11 +70,27 @@ function createMessage(msg) {
   if(!msg.message) return {message: {}, sender: {}}
   
   const getTextMsg = (x) => x.conversation || x.extendedTextMessage?.text || x.imageMessage?.caption || x.vidioMessage?.caption || x.documentWithCaptionMessage?.message?.documentMessage?.caption || x.reactionMessage?.text || ""
+  const mapType = (type, msgObj) => {
+    if(type === "conversation" || type === "extendedTextMessage") return "text"
+    if (type === "imageMessage") return "image"
+    if (type === "videoMessage") return msgObj.videoMessage?.gifPlayback ? "gif" : "video"
+    if (type === "audioMessage") return msgObj.audioMessage?.ptt ? "vn" : "audio"
+    if (type === "documentMessage") return "document"
+    if (type === "reactionMessage") return "reaction"
+    if (type === "stickerMessage") return "sticker"
+    if (type === "reactionMessage") return "reaction"
+    if (type === "listMessage") return "list"
+    return type
+  }
+  const filterTypes = ["senderKeyDistributionMessage", "messageContextInfo"]
+  
   
   // Message
   m.message = {}
   m.message.text = getTextMsg(msg.message)
+  m.message.type = mapType(Object.keys(msg.message).filter(t=>!filterTypes.includes(t))[0], msg)
   m.message.jId = msg.key?.remoteJid == "status@broadcast"?msg.key.participant:msg.key?.remoteJid
+  m.message.baileys = msg
   m.message.isGroup = m.message.jId.endsWith("@g.us")
   m.message.prefix = prefixList.find(i=>m.message.text?.startsWith(i))
   m.message.command = m.message.text?.split(" ")[0].replace(m.message.prefix, "")
@@ -86,6 +105,7 @@ function createMessage(msg) {
     // Message Quoted
     m.message.quoted = {}
     m.message.quoted.text = getTextMsg(msg.message?.extendedTextMessage?.contextInfo?.quotedMessage)
+    m.message.quoted.type = mapType(Object.keys(msg.message?.extendedTextMessage?.contextInfo?.quotedMessage).filter(t=>!filterTypes.includes(t))[0], msg.message?.extendedTextMessage?.contextInfo?.quotedMessage)
   
     // Sender quoted
     m.sender.quoted = {id: msg.message?.extendedTextMessage?.contextInfo?.participant}
@@ -93,4 +113,62 @@ function createMessage(msg) {
   
   
   return m
+}
+
+async function sendText (jId, text, mentions, quoted) {
+  return createMessage(await sock.sendMessage(jId, {text, mentions}, {quoted}))
+}
+module.exports.sendText = sendText
+
+async function sendImage (jId, url, caption, mentions, quoted) {
+  return createMessage(await sock.sendMessage(jId, {image: {url}, caption, mentions}, {quoted}))
+}
+module.exports.sendImage = sendImage
+
+async function sendVidio (jId, url, caption, mentions, quoted) {
+  return createMessage(await sock.sendMessage(jId, {vidio: {url}, caption, mentions}, {quoted}))
+}
+module.exports.sendVidio = sendVidio
+
+async function sendContact (jId, data, mentions, quoted) {
+  const list = []
+  for(const id of data) {
+    list.push({
+      display: id.name,
+      vcard: "BEGIN:VCARD\n"
+            + "VERSION:3.0\n" 
+            + "FN:"+id.name+"\n"
+            + "TEL;type=CELL;type=VOICE;waid="+id.number+":+"+id.number+"\n"
+            + "END:VCARD"
+    })
+  }
+  return createMessage(await sock.sendMessage(jId, {contacts: {name: `${list.length} Contact`, contacts: list}}))
+}
+module.exports.sendContact = sendContact
+
+async function sendAudio (jId, url, mimetype, quoted) {
+  const content = getUpload(url)
+  return createMessage(await sock.sendMessage(jId, {audio: content, mimetype}, {quoted}))
+}
+module.exports.sendAudio = sendAudio
+
+function downloadMedia(m, type) {
+  return downloadMediaMessage(m, type, {}, {reuploadRequest:sock.updateMediaMessage})
+}
+module.exports.downloadMedia = downloadMedia
+
+async function sendSticker (jId, data, quoted) {
+  return createMessage(await sock.sendMessage(jId, {sticker: data}, {quoted}))
+}
+
+function getUpload (input) {
+  if (input instanceof Buffer) return input
+  if (typeof input === "string") return {url:input}
+  if (
+    input instanceof ReadableStream || 
+    input.constructor.name === "Transform" ||
+    input.constructor.name === "Sharp" ||
+    input.constructor.name === "IncomingMessage"
+  ) return {stream:input}
+  throw "Tipe upload tidak diketahui"
 }
